@@ -114,6 +114,10 @@ async function handleFileChosen(file) {
   $("#processing-preview-img").src = capturedObjectUrl;
   setOcrProgress(0, "Lendo a nota fiscal…");
 
+  // O OCR é só uma ajuda: se ele falhar por qualquer motivo (foto
+  // ilegível, modelo não carregou, etc.), seguimos para a revisão com
+  // os campos em branco — a pessoa sempre pode preencher/corrigir na
+  // tela seguinte, e a nota nunca fica bloqueada por causa disso.
   let fields = { data: "", numero: "", cnpj: "", razao: "", valor: "", pagamento: "" };
   try {
     const text = await Ocr.recognize(file, (m) => {
@@ -201,6 +205,9 @@ function gatherFieldsFromForm() {
   };
 }
 
+// Confirmar sempre salva a nota localmente e tenta enviar — mesmo que
+// nenhum campo tenha sido preenchido. Não há validação que bloqueie o
+// botão: uma nota incompleta ainda é melhor que uma nota perdida.
 async function confirmAndSave() {
   const fields = gatherFieldsFromForm();
   const thumbnail = await makeThumbnail(capturedBlob).catch(() => null);
@@ -210,6 +217,8 @@ async function confirmAndSave() {
     photoBlob: capturedBlob,
     thumbnail,
     status: "pending",
+    photoUploaded: false,
+    rowAdded: false,
   });
 
   // Salva as categorias novas como sugestão futura.
@@ -223,7 +232,7 @@ async function confirmAndSave() {
 
   resetCaptureStage();
   showView("#view-saving");
-  setSaveProgress(0, "Enviando a foto para o OneDrive…");
+  setSaveProgress(0, "Enviando a foto e a linha da planilha…");
 
   const outcome = await trySyncOne(receipt.id, (pct, label) => setSaveProgress(pct, label));
 
@@ -235,7 +244,7 @@ async function confirmAndSave() {
   } else if (outcome.reason === "redirect") {
     // saiu para autenticação interativa; nada a fazer aqui
   } else {
-    showToast(outcome.message || "Não consegui enviar agora. A nota ficou salva e vou tentar de novo.", true);
+    showToast(outcome.message || "Não consegui enviar tudo agora. A nota ficou salva e vou tentar de novo.", true);
   }
 }
 
@@ -247,6 +256,13 @@ function setSaveProgress(pct, label) {
 // ---------------------------------------------------------------
 // Sincronização com o Microsoft Graph
 // ---------------------------------------------------------------
+// Foto e linha da planilha são tratadas como duas operações
+// independentes: uma falhar não impede a outra de ser tentada, e cada
+// uma só é repetida numa nova tentativa se ainda não tiver dado certo
+// antes (evita duplicar foto/linha quando parte do envio já funcionou).
+// Isso garante o que a Thais pediu: mesmo com campos não reconhecidos
+// pelo OCR, uma linha (ainda que incompleta) sempre é criada na
+// planilha, e a foto sempre é guardada no OneDrive.
 async function trySyncOne(id, onProgress) {
   const settings = Storage.getSettings();
 
@@ -260,31 +276,67 @@ async function trySyncOne(id, onProgress) {
   }
 
   const receipt = await Storage.getReceipt(id);
-  if (!receipt || !receipt.photoBlob) {
-    return { ok: false, message: "Não encontrei a foto desta nota para reenviar." };
+  if (!receipt) {
+    return { ok: false, message: "Não encontrei esta nota para reenviar." };
   }
 
+  let token;
   try {
-    const token = await Auth.getToken();
-    if (!token) return { ok: false, reason: "redirect" }; // login interativo em andamento
+    token = await Auth.getToken();
+  } catch (err) {
+    console.error("Falha ao obter token:", err);
+    await Storage.updateReceipt(id, { status: "error", errorMessage: err.message || "Falha na autenticação." });
+    return { ok: false, message: err.message || "Falha na autenticação." };
+  }
+  if (!token) return { ok: false, reason: "redirect" }; // login interativo em andamento
 
-    const filename = Graph.suggestFileName(receipt.fields);
-    if (onProgress) onProgress(10, "Enviando a foto para o OneDrive…");
-    await Graph.uploadPhoto(settings, receipt.photoBlob, filename, token, (pct) => {
-      if (onProgress) onProgress(10 + Math.round(pct * 0.6), "Enviando a foto para o OneDrive…");
-    });
+  let photoOk = receipt.photoUploaded === true;
+  let rowOk = receipt.rowAdded === true;
+  const errors = [];
 
-    if (onProgress) onProgress(80, "Adicionando linha na planilha…");
-    await Graph.addExcelRow(settings, receipt.fields, token);
+  // 1) Foto no OneDrive (pula se uma tentativa anterior já enviou).
+  if (!photoOk) {
+    if (!receipt.photoBlob) {
+      errors.push("Foto não encontrada localmente para reenviar.");
+    } else {
+      try {
+        if (onProgress) onProgress(10, "Enviando a foto para o OneDrive…");
+        const filename = receipt.photoFilename || Graph.suggestFileName(receipt.fields);
+        await Graph.uploadPhoto(settings, receipt.photoBlob, filename, token, (pct) => {
+          if (onProgress) onProgress(10 + Math.round(pct * 0.5), "Enviando a foto para o OneDrive…");
+        });
+        photoOk = true;
+        await Storage.updateReceipt(id, { photoUploaded: true, photoFilename: filename });
+      } catch (err) {
+        console.error("Falha ao enviar a foto:", err);
+        errors.push(err.message || "Falha ao enviar a foto.");
+      }
+    }
+  }
 
+  // 2) Linha na planilha (pula se uma tentativa anterior já criou) —
+  // tentada mesmo que o envio da foto acima tenha falhado.
+  if (!rowOk) {
+    try {
+      if (onProgress) onProgress(70, "Adicionando linha na planilha…");
+      await Graph.addExcelRow(settings, receipt.fields, token);
+      rowOk = true;
+      await Storage.updateReceipt(id, { rowAdded: true });
+    } catch (err) {
+      console.error("Falha ao adicionar linha na planilha:", err);
+      errors.push(err.message || "Falha ao adicionar linha na planilha.");
+    }
+  }
+
+  if (photoOk && rowOk) {
     if (onProgress) onProgress(100, "Concluído.");
     await Storage.updateReceipt(id, { status: "synced", errorMessage: null, photoBlob: null });
     return { ok: true };
-  } catch (err) {
-    console.error("Falha ao sincronizar nota:", err);
-    await Storage.updateReceipt(id, { status: "error", errorMessage: err.message || "Falha ao enviar." });
-    return { ok: false, message: err.message || "Falha ao enviar." };
   }
+
+  const message = errors.join(" ") || "Falha ao enviar.";
+  await Storage.updateReceipt(id, { status: "error", errorMessage: message });
+  return { ok: false, message };
 }
 
 async function retryPending(silent = false) {

@@ -4,6 +4,11 @@
 //  1) adicionar uma linha na tabela do Excel configurada;
 //  2) enviar a foto original para a pasta do OneDrive configurada.
 // Os caminhos (arquivo Excel, tabela, pasta) vêm das Configurações.
+//
+// Importante: os dois passos acima são independentes um do outro
+// (ver trySyncOne em app.js) — mesmo que o OCR não tenha reconhecido
+// todos os campos, ainda assim uma linha (possivelmente incompleta)
+// deve ser criada na planilha, e a foto deve ser guardada no OneDrive.
 // ============================================================
 
 const Graph = (() => {
@@ -33,9 +38,14 @@ const Graph = (() => {
     return res;
   }
 
+  // Converte o texto do campo "valor" para número. Retorna `null` (não
+  // uma string vazia ou texto não numérico) quando o campo não foi
+  // preenchido ou não é um número válido — colunas do Excel formatadas
+  // como número/moeda podem rejeitar a linha inteira se receberem uma
+  // string vazia ou um texto qualquer no lugar de um número.
   function parseValorNumero(valorStr) {
     if (valorStr === 0) return 0;
-    if (!valorStr) return "";
+    if (!valorStr) return null;
     let clean = String(valorStr).trim().replace(/[R$\s]/gi, "");
     // Só tratamos como "vírgula decimal brasileira" se houver vírgula.
     // "1.234,56" -> "1234.56" ; "1234,56" -> "1234.56" ; "1234.56" fica igual.
@@ -43,7 +53,13 @@ const Graph = (() => {
       clean = clean.replace(/\./g, "").replace(",", ".");
     }
     const n = parseFloat(clean);
-    return isNaN(n) ? valorStr : n;
+    return isNaN(n) ? null : n;
+  }
+
+  // Campos de texto: string vazia é seguro. `null` explícito quando não
+  // há valor (evita mandar "" para colunas que o Excel tenta tipar).
+  function textOrNull(v) {
+    return v ? v : null;
   }
 
   async function addExcelRow({ excelPath, excelTable }, fields, token) {
@@ -51,13 +67,13 @@ const Graph = (() => {
     const url = `${BASE}/me/drive/root:/${encoded}:/workbook/tables('${encodeURIComponent(excelTable)}')/rows/add`;
 
     const row = [
-      fields.data || "",
-      fields.numero || "",
-      fields.cnpj || "",
-      fields.razao || "",
+      textOrNull(fields.data),
+      textOrNull(fields.numero),
+      textOrNull(fields.cnpj),
+      textOrNull(fields.razao),
       parseValorNumero(fields.valor),
-      fields.pagamento || "",
-      fields.categoria || "",
+      textOrNull(fields.pagamento),
+      textOrNull(fields.categoria),
     ];
 
     await graphFetch(url, token, {

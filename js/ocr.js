@@ -8,13 +8,92 @@
 // ============================================================
 
 const Ocr = (() => {
+  // Worker do Tesseract é reaproveitado entre notas (evita recarregar o
+  // modelo de idioma a cada foto) e configurado para tratar a imagem como
+  // um único bloco de texto (PSM 6), o que costuma funcionar bem melhor
+  // do que o modo automático em fotos de cupons/notas fiscais.
+  let workerPromise = null;
+  let progressCallback = null;
+
+  async function getWorker() {
+    if (!workerPromise) {
+      workerPromise = Tesseract.createWorker("por", 1, {
+        logger: (m) => {
+          if (progressCallback) progressCallback(m);
+        },
+      }).then(async (worker) => {
+        try {
+          await worker.setParameters({
+            tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : "6",
+          });
+        } catch (e) {
+          console.warn("Não foi possível ajustar parâmetros do Tesseract:", e);
+        }
+        return worker;
+      });
+    }
+    return workerPromise;
+  }
+
+  // Converte a foto para tons de cinza e estica o contraste antes do OCR.
+  // Fotos de cupons fiscais (impressão térmica desbotada, sombra do
+  // celular, iluminação ruim) ganham bastante precisão com isso. Se algo
+  // der errado aqui, cai de volta para a imagem original — o OCR nunca
+  // deve travar por causa do pré-processamento.
+  async function preprocessImage(file) {
+    const bitmap = await createImageBitmap(file);
+    const maxSide = 2200;
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+
+    let min = 255,
+      max = 0;
+    const gray = new Uint8ClampedArray(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      gray[p] = g;
+      if (g < min) min = g;
+      if (g > max) max = g;
+    }
+    const range = Math.max(1, max - min);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      const v = ((gray[p] - min) / range) * 255;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    const blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92));
+    return blob || file;
+  }
+
   async function recognize(imageFile, onProgress) {
-    const { data } = await Tesseract.recognize(imageFile, "por", {
-      logger: (m) => {
-        if (onProgress) onProgress(m);
-      },
-    });
-    return data.text || "";
+    progressCallback = onProgress || null;
+
+    let input = imageFile;
+    try {
+      input = await preprocessImage(imageFile);
+    } catch (e) {
+      console.warn("Pré-processamento de imagem falhou, uso a foto original:", e);
+      input = imageFile;
+    }
+
+    try {
+      const worker = await getWorker();
+      const { data } = await worker.recognize(input);
+      return data.text || "";
+    } finally {
+      progressCallback = null;
+    }
   }
 
   function stripAccents(str) {
