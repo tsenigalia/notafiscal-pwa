@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Notas Fiscais</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#1F2A24" />
+
+<!-- iOS: instalação na tela de início -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Notas" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="icon" href="icons/icon-192.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ TOPBAR ============ -->
+  <header class="topbar">
+    <h1 id="topbar-title">Notas fiscais</h1>
+    <button class="icon-btn" id="btn-open-settings" aria-label="Configurações">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
+    </button>
+  </header>
+
+  <!-- ============ HOME ============ -->
+  <main class="view active" id="view-home">
+    <div class="hero-action">
+      <p>Fotografe a nota, confira os dados e envie direto para sua planilha e OneDrive.</p>
+      <button class="btn-primary" id="btn-nova-nota">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        Nova nota fiscal
+      </button>
+    </div>
+
+    <div id="pending-banner" class="hidden" style="margin: 4px 20px 0;">
+      <button class="btn-secondary" id="btn-retry-pending"></button>
+    </div>
+
+    <div class="section-label" id="lista-label">Últimas notas neste aparelho</div>
+    <div class="receipt-list" id="receipt-list"></div>
+    <div class="empty-state hidden" id="empty-state">Nenhuma nota registrada ainda. Toque em "Nova nota fiscal" para começar.</div>
+  </main>
+
+  <!-- ============ CAPTURA ============ -->
+  <main class="view" id="view-capture">
+    <div class="capture-stage" id="capture-stage-pick">
+      <div class="capture-actions">
+        <label class="btn-primary" for="input-camera" style="cursor:pointer;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Tirar foto
+        </label>
+        <input type="file" id="input-camera" accept="image/*" capture="environment" class="hidden" />
+
+        <label class="btn-secondary" for="input-gallery" style="cursor:pointer;">Escolher da galeria</label>
+        <input type="file" id="input-gallery" accept="image/*" class="hidden" />
+
+        <button class="btn-text" id="btn-cancel-capture">Cancelar</button>
+      </div>
+    </div>
+
+    <div class="capture-stage hidden" id="capture-stage-processing">
+      <img class="capture-preview" id="processing-preview-img" alt="Nota fiscal capturada" />
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-fill" id="ocr-progress-fill"></div></div>
+        <div class="progress-label" id="ocr-progress-label">Lendo a nota fiscal…</div>
+      </div>
+      <p class="capture-hint">Isso leva alguns segundos. A próxima tela deixa tudo editável antes de salvar.</p>
+    </div>
+  </main>
+
+  <!-- ============ REVISÃO ============ -->
+  <main class="view" id="view-review">
+    <div class="form-wrap">
+      <img class="review-photo" id="review-photo" alt="Foto da nota fiscal" />
+
+      <div class="field" id="field-data">
+        <label for="f-data">Data de emissão</label>
+        <input type="date" id="f-data" data-mono="true" />
+      </div>
+      <div class="field" id="field-numero">
+        <label for="f-numero">Número da nota fiscal</label>
+        <input type="text" id="f-numero" inputmode="numeric" data-mono="true" placeholder="Não identificado" />
+      </div>
+      <div class="field" id="field-cnpj">
+        <label for="f-cnpj">CNPJ do emissor</label>
+        <input type="text" id="f-cnpj" inputmode="numeric" data-mono="true" placeholder="00.000.000/0000-00" />
+      </div>
+      <div class="field" id="field-razao">
+        <label for="f-razao">Razão social / estabelecimento</label>
+        <input type="text" id="f-razao" placeholder="Não identificado" />
+      </div>
+      <div class="field" id="field-valor">
+        <label for="f-valor">Valor total (R$)</label>
+        <input type="text" id="f-valor" inputmode="decimal" data-mono="true" placeholder="0,00" />
+      </div>
+      <div class="field" id="field-pagamento">
+        <label for="f-pagamento">Forma de pagamento</label>
+        <select id="f-pagamento">
+          <option value="">Não identificado</option>
+          <option value="Dinheiro">Dinheiro</option>
+          <option value="Pix">Pix</option>
+          <option value="Cartão de débito">Cartão de débito</option>
+          <option value="Cartão de crédito">Cartão de crédito</option>
+          <option value="Boleto">Boleto</option>
+          <option value="Outro">Outro</option>
+        </select>
+      </div>
+
+      <hr class="divider-perf" />
+
+      <div class="field" id="field-categoria">
+        <label for="f-categoria">Categoria</label>
+        <input type="text" id="f-categoria" list="categorias-sugeridas" placeholder="ex.: reforma, mercado" />
+        <datalist id="categorias-sugeridas"></datalist>
+      </div>
+    </div>
+
+    <div class="sticky-actions">
+      <button class="btn-primary" id="btn-confirmar-salvar">Confirmar e salvar</button>
+      <button class="btn-text" id="btn-descartar">Descartar esta nota</button>
+    </div>
+  </main>
+
+  <!-- ============ SALVANDO ============ -->
+  <main class="view" id="view-saving">
+    <div class="capture-stage">
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-fill" id="save-progress-fill"></div></div>
+        <div class="progress-label" id="save-progress-label">Enviando para o Excel…</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ CONFIGURAÇÕES ============ -->
+  <main class="view" id="view-settings">
+    <div class="auth-status">
+      <div class="who">
+        <span id="auth-name">Não conectado</span>
+        <span class="email" id="auth-email"></span>
+      </div>
+      <button class="btn-secondary" id="btn-auth-toggle" style="width:auto; padding:9px 16px;">Entrar</button>
+    </div>
+
+    <div class="settings-group">
+      <h2>Planilha do Excel</h2>
+      <div class="field">
+        <label for="s-excel-path">Caminho do arquivo (no OneDrive)</label>
+        <input type="text" id="s-excel-path" placeholder="/Financeiro/Notas Fiscais.xlsx" />
+      </div>
+      <div class="field">
+        <label for="s-excel-table">Nome da tabela do Excel</label>
+        <input type="text" id="s-excel-table" placeholder="TabelaNotas" />
+      </div>
+
+      <h2>Fotos das notas</h2>
+      <div class="field">
+        <label for="s-onedrive-folder">Pasta no OneDrive</label>
+        <input type="text" id="s-onedrive-folder" placeholder="/Financeiro/Notas Fiscais/Fotos" />
+      </div>
+
+      <h2>Categorias</h2>
+      <div class="field">
+        <label for="s-categorias">Sugestões de categoria (separadas por vírgula)</label>
+        <input type="text" id="s-categorias" placeholder="reforma, mercado, casa, viagem" />
+      </div>
+
+      <button class="btn-primary" id="btn-salvar-config" style="margin-top:18px;">Salvar configurações</button>
+      <p class="capture-hint" id="config-saved-msg" style="margin-top:10px;"></p>
+    </div>
+
+    <div class="settings-group">
+      <h2>Pendências</h2>
+      <p class="capture-hint" id="settings-pending-info" style="text-align:left;">Nenhuma nota pendente de envio.</p>
+    </div>
+  </main>
+
+  <!-- ============ NAV INFERIOR ============ -->
+  <nav class="bottom-nav">
+    <button id="nav-home" class="active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      Início
+    </button>
+    <button id="nav-settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
+      Configurações
+    </button>
+  </nav>
+</div>
+
+<div id="toast-host"></div>
+
+<!-- MSAL (autenticação Microsoft) -->
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
+<!-- Tesseract.js (OCR no navegador) -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<script src="js/config.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/ocr.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
