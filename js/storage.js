@@ -15,16 +15,15 @@ const Storage = (() => {
   function getSettings() {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if (!raw) return { excelPath: "", excelTable: "", oneDriveFolder: "", categorias: [] };
+      if (!raw) return { excelPath: "", excelTable: "", oneDriveFolder: "" };
       const parsed = JSON.parse(raw);
       return {
         excelPath: parsed.excelPath || "",
         excelTable: parsed.excelTable || "",
         oneDriveFolder: parsed.oneDriveFolder || "",
-        categorias: Array.isArray(parsed.categorias) ? parsed.categorias : [],
       };
     } catch (e) {
-      return { excelPath: "", excelTable: "", oneDriveFolder: "", categorias: [] };
+      return { excelPath: "", excelTable: "", oneDriveFolder: "" };
     }
   }
 

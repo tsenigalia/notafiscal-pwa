@@ -8,13 +8,14 @@
 // em storage.js, não pelo service worker).
 // ============================================================
 
-const CACHE_NAME = "notasfiscais-shell-v4";
+const CACHE_NAME = "notasfiscais-shell-v5";
 const CORE_ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
   "./css/styles.css",
   "./js/config.js",
+  "./js/categorias.js",
   "./js/storage.js",
   "./js/auth.js",
   "./js/ocr.js",

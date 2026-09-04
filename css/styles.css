@@ -228,6 +228,30 @@ html, body {
 .dup-banner strong { display: block; font-size: 13.5px; color: var(--stamp); margin-bottom: 4px; }
 .dup-banner p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
 
+/* ---------- Modal ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(31, 42, 34, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+.modal-card {
+  background: var(--paper-raised);
+  border-radius: var(--radius);
+  padding: 20px;
+  max-width: 360px;
+  width: 100%;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+.modal-card h3 { margin: 0 0 8px; font-size: 16px; color: var(--stamp); }
+.modal-card p { margin: 0 0 18px; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.modal-actions { display: flex; gap: 10px; }
+.modal-actions button { flex: 1; }
+
 .review-photo {
   width: 100%;
   border-radius: var(--radius);

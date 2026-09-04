@@ -12,15 +12,20 @@ const $ = (sel) => document.querySelector(sel);
 let capturedBlob = null;
 let capturedObjectUrl = null;
 let capturedImageHash = null;
+let currentDupInfo = null; // resultado da checagem de duplicata da nota em revisão
 
 // Quão parecidas duas fotos precisam ser (em bits diferentes, de 64) para
-// disparar o aviso de duplicata por imagem. Testado para pegar "mesma nota,
-// segunda foto" sem disparar em notas realmente diferentes.
-const DUP_HASH_THRESHOLD = 8;
+// disparar o aviso de duplicata por imagem. Duas fotos tiradas à mão da
+// MESMA nota (ângulo/enquadramento/luz levemente diferentes a cada vez)
+// costumam variar bem mais do que se imagina — um limiar apertado deixa
+// passar duplicatas reais. 18/64 (~28%) é mais tolerante a isso; ainda
+// assim é heurístico, então pode precisar de ajuste com o uso real.
+const DUP_HASH_THRESHOLD = 18;
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireNav();
   wireCapture();
+  wireCategoria();
   wireReview();
   wireSettings();
 
@@ -109,6 +114,7 @@ function resetCaptureStage() {
   capturedObjectUrl = null;
   capturedBlob = null;
   capturedImageHash = null;
+  currentDupInfo = null;
 }
 
 async function handleFileChosen(file) {
@@ -211,14 +217,40 @@ function setOcrProgress(pct, label) {
 // Revisão
 // ---------------------------------------------------------------
 function wireReview() {
-  $("#btn-confirmar-salvar").addEventListener("click", confirmAndSave);
+  $("#btn-confirmar-salvar").addEventListener("click", async () => {
+    // Se a checagem encontrou uma provável duplicata, pede confirmação
+    // explícita antes de seguir — a pessoa decide, o app não bloqueia nem
+    // deixa passar batido.
+    if (currentDupInfo) {
+      const quiseguir = await askDuplicateConfirmation(currentDupInfo);
+      if (!quiseguir) return; // fica na tela de revisão para conferir/corrigir
+    }
+    confirmAndSave();
+  });
   $("#btn-descartar").addEventListener("click", () => {
     resetCaptureStage();
     showView("#view-home");
   });
+  $("#dup-modal-nao").addEventListener("click", () => resolveDuplicateModal(false));
+  $("#dup-modal-sim").addEventListener("click", () => resolveDuplicateModal(true));
+}
+
+// Resolvida pelo botão Sim/Não do modal — ver askDuplicateConfirmation.
+let resolveDuplicateModal = () => {};
+
+function askDuplicateConfirmation(dupInfo) {
+  $("#dup-modal-text").textContent = describeDupInfo(dupInfo);
+  $("#dup-modal").classList.remove("hidden");
+  return new Promise((resolve) => {
+    resolveDuplicateModal = (proceed) => {
+      $("#dup-modal").classList.add("hidden");
+      resolve(proceed);
+    };
+  });
 }
 
 function openReview(fields, dupInfo) {
+  currentDupInfo = dupInfo || null;
   $("#review-photo").src = capturedObjectUrl;
   $("#f-data").value = fields.data || "";
   $("#f-numero").value = fields.numero || "";
@@ -226,20 +258,38 @@ function openReview(fields, dupInfo) {
   $("#f-razao").value = fields.razao || "";
   $("#f-valor").value = fields.valor || "";
   $("#f-pagamento").value = fields.pagamento || "";
-  $("#f-categoria").value = "";
-
-  const settings = Storage.getSettings();
-  const datalist = $("#categorias-sugeridas");
-  datalist.innerHTML = "";
-  settings.categorias.forEach((c) => {
-    const opt = document.createElement("option");
-    opt.value = c;
-    datalist.appendChild(opt);
-  });
+  resetCategoriaField();
 
   markUncertainFields(fields);
   renderDupBanner(dupInfo);
   showView("#view-review");
+}
+
+// ---------------------------------------------------------------
+// Categoria (lista fixa vinda de js/categorias.js, com opção "Outra")
+// ---------------------------------------------------------------
+const CATEGORIA_OUTRA_VALUE = "__outra__";
+
+function wireCategoria() {
+  const select = $("#f-categoria");
+  select.innerHTML = "";
+  select.appendChild(new Option("Selecione…", ""));
+  (typeof CATEGORIAS_PADRAO !== "undefined" ? CATEGORIAS_PADRAO : []).forEach((c) => {
+    select.appendChild(new Option(c, c));
+  });
+  select.appendChild(new Option("Outra (digitar)…", CATEGORIA_OUTRA_VALUE));
+
+  select.addEventListener("change", () => {
+    const isOutra = select.value === CATEGORIA_OUTRA_VALUE;
+    $("#f-categoria-outra").classList.toggle("hidden", !isOutra);
+    if (isOutra) $("#f-categoria-outra").focus();
+  });
+}
+
+function resetCategoriaField() {
+  $("#f-categoria").value = "";
+  $("#f-categoria-outra").value = "";
+  $("#f-categoria-outra").classList.add("hidden");
 }
 
 function markUncertainFields(fields) {
@@ -249,12 +299,9 @@ function markUncertainFields(fields) {
   });
 }
 
-function renderDupBanner(dupInfo) {
-  const banner = $("#dup-banner");
-  if (!dupInfo) {
-    banner.classList.add("hidden");
-    return;
-  }
+// Frase compartilhada pelo banner (informativo, na revisão) e pelo modal
+// de confirmação (que pede a decisão explícita antes de salvar).
+function describeDupInfo(dupInfo) {
   const r = dupInfo.receipt;
   const quando = r.createdAt
     ? new Date(r.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -264,12 +311,23 @@ function renderDupBanner(dupInfo) {
     dupInfo.reason === "foto"
       ? "a foto é muito parecida com a de uma nota já registrada"
       : "o número da nota e o CNPJ já foram registrados antes";
-  $("#dup-banner-text").textContent =
-    `Encontrei uma nota parecida — ${estab}, ${quando} — ${motivo}. Confira antes de confirmar; se for outra nota mesmo, pode continuar normalmente.`;
+  return `Encontrei uma nota parecida — ${estab}, ${quando} — ${motivo}. Deseja continuar mesmo assim?`;
+}
+
+function renderDupBanner(dupInfo) {
+  const banner = $("#dup-banner");
+  if (!dupInfo) {
+    banner.classList.add("hidden");
+    return;
+  }
+  $("#dup-banner-text").textContent = describeDupInfo(dupInfo);
   banner.classList.remove("hidden");
 }
 
 function gatherFieldsFromForm() {
+  const categoriaSelect = $("#f-categoria").value;
+  const categoria =
+    categoriaSelect === CATEGORIA_OUTRA_VALUE ? $("#f-categoria-outra").value.trim() : categoriaSelect;
   return {
     data: $("#f-data").value,
     numero: $("#f-numero").value.trim(),
@@ -277,7 +335,7 @@ function gatherFieldsFromForm() {
     razao: $("#f-razao").value.trim(),
     valor: $("#f-valor").value.trim(),
     pagamento: $("#f-pagamento").value,
-    categoria: $("#f-categoria").value.trim(),
+    categoria,
   };
 }
 
@@ -307,15 +365,6 @@ async function confirmAndSave() {
     photoUploaded: false,
     rowAdded: false,
   });
-
-  // Salva as categorias novas como sugestão futura.
-  if (fields.categoria) {
-    const settings = Storage.getSettings();
-    if (!settings.categorias.includes(fields.categoria)) {
-      settings.categorias.push(fields.categoria);
-      Storage.saveSettings(settings);
-    }
-  }
 
   resetCaptureStage();
   showView("#view-saving");
@@ -550,7 +599,6 @@ function wireSettings() {
       excelPath: $("#s-excel-path").value.trim(),
       excelTable: $("#s-excel-table").value.trim(),
       oneDriveFolder: $("#s-onedrive-folder").value.trim(),
-      categorias: $("#s-categorias").value.split(",").map((s) => s.trim()).filter(Boolean),
     };
     Storage.saveSettings(settings);
     const msg = $("#config-saved-msg");
@@ -576,7 +624,6 @@ function loadSettingsIntoForm() {
   $("#s-excel-path").value = s.excelPath;
   $("#s-excel-table").value = s.excelTable;
   $("#s-onedrive-folder").value = s.oneDriveFolder;
-  $("#s-categorias").value = s.categorias.join(", ");
   updateAuthUi();
 }
 

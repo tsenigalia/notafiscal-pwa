@@ -126,8 +126,8 @@
 
       <div class="field" id="field-categoria">
         <label for="f-categoria">Categoria</label>
-        <input type="text" id="f-categoria" list="categorias-sugeridas" placeholder="ex.: reforma, mercado" />
-        <datalist id="categorias-sugeridas"></datalist>
+        <select id="f-categoria"></select>
+        <input type="text" id="f-categoria-outra" class="hidden" placeholder="Digite a categoria" style="margin-top:8px;" />
       </div>
     </div>
 
@@ -174,11 +174,9 @@
         <input type="text" id="s-onedrive-folder" placeholder="/Financeiro/Notas Fiscais/Fotos" />
       </div>
 
-      <h2>Categorias</h2>
-      <div class="field">
-        <label for="s-categorias">Sugestões de categoria (separadas por vírgula)</label>
-        <input type="text" id="s-categorias" placeholder="reforma, mercado, casa, viagem" />
-      </div>
+      <p class="capture-hint" style="text-align:left; margin-top:4px;">
+        As categorias da nota vêm de <code>js/categorias.js</code> — edite esse arquivo no repositório para adicionar, remover ou renomear categorias.
+      </p>
 
       <button class="btn-primary" id="btn-salvar-config" style="margin-top:18px;">Salvar configurações</button>
       <p class="capture-hint" id="config-saved-msg" style="margin-top:10px;"></p>
@@ -205,12 +203,25 @@
 
 <div id="toast-host"></div>
 
+<!-- ============ MODAL: NOTA DUPLICADA ============ -->
+<div class="modal-overlay hidden" id="dup-modal">
+  <div class="modal-card">
+    <h3>Nota duplicada</h3>
+    <p id="dup-modal-text"></p>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="dup-modal-nao">Não</button>
+      <button class="btn-primary" id="dup-modal-sim">Sim, continuar</button>
+    </div>
+  </div>
+</div>
+
 <!-- MSAL (autenticação Microsoft) -->
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
 <!-- Tesseract.js (OCR no navegador) -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
 <script src="js/config.js"></script>
+<script src="js/categorias.js"></script>
 <script src="js/storage.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/ocr.js"></script>
