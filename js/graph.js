@@ -94,6 +94,17 @@ const Graph = (() => {
   }
 
   async function uploadPhoto({ oneDriveFolder }, blob, filename, token, onProgress) {
+    // Guarda contra blob vazio/corrompido (visto em iOS: o Blob recuperado do
+    // IndexedDB às vezes volta com 0 bytes). Sem essa checagem, o loop de
+    // envio abaixo simplesmente não roda (offset < total já começa falso) e
+    // a função retorna como se tivesse dado certo, sem nunca criar o arquivo
+    // no OneDrive.
+    if (!blob || !blob.size) {
+      throw new Error(
+        "A foto não pôde ser lida para reenvio (arquivo vazio). Tire a foto novamente."
+      );
+    }
+
     const encodedFolder = encodePath(oneDriveFolder);
     const encodedFile = encodeURIComponent(filename);
 

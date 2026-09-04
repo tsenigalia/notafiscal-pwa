@@ -11,6 +11,12 @@ const $ = (sel) => document.querySelector(sel);
 
 let capturedBlob = null;
 let capturedObjectUrl = null;
+let capturedImageHash = null;
+
+// Quão parecidas duas fotos precisam ser (em bits diferentes, de 64) para
+// disparar o aviso de duplicata por imagem. Testado para pegar "mesma nota,
+// segunda foto" sem disparar em notas realmente diferentes.
+const DUP_HASH_THRESHOLD = 8;
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireNav();
@@ -102,6 +108,7 @@ function resetCaptureStage() {
   if (capturedObjectUrl) URL.revokeObjectURL(capturedObjectUrl);
   capturedObjectUrl = null;
   capturedBlob = null;
+  capturedImageHash = null;
 }
 
 async function handleFileChosen(file) {
@@ -133,7 +140,55 @@ async function handleFileChosen(file) {
     showToast("Não consegui ler a nota automaticamente — preencha os campos manualmente.", true);
   }
 
-  openReview(fields);
+  // Hash da foto para a checagem de duplicata abaixo — nunca bloqueia o
+  // fluxo se falhar (ex.: navegador sem suporte a createImageBitmap).
+  try {
+    capturedImageHash = await Ocr.computeImageHash(file);
+  } catch (err) {
+    console.warn("Não foi possível calcular o hash da imagem:", err);
+    capturedImageHash = null;
+  }
+
+  const dupInfo = await findPossibleDuplicate(fields, capturedImageHash).catch((err) => {
+    console.warn("Checagem de nota duplicada falhou:", err);
+    return null;
+  });
+
+  openReview(fields, dupInfo);
+}
+
+// Compara com as notas já registradas neste aparelho (enviadas ou ainda
+// pendentes) para avisar sobre uma possível duplicata — mesma nota
+// fotografada duas vezes por engano. Não bloqueia nada: é só um aviso na
+// tela de revisão, e a pessoa decide se confirma mesmo assim.
+async function findPossibleDuplicate(fields, imageHash) {
+  const all = await Storage.getAllReceipts();
+
+  // Sinal mais forte: mesmo CNPJ + mesmo número da nota já registrados.
+  if (fields.cnpj && fields.numero) {
+    const sameDoc = all.find(
+      (r) => r.fields && r.fields.cnpj === fields.cnpj && r.fields.numero === fields.numero
+    );
+    if (sameDoc) return { receipt: sameDoc, reason: "campos" };
+  }
+
+  // Sinal por imagem: pega o caso de fotografar a mesma nota de novo
+  // mesmo quando o OCR não leu CNPJ/número (ou leu diferente por engano).
+  if (imageHash) {
+    let best = null,
+      bestDist = Infinity;
+    for (const r of all) {
+      if (!r.imageHash) continue;
+      const dist = Ocr.hammingDistanceHex(imageHash, r.imageHash);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = r;
+      }
+    }
+    if (best && bestDist <= DUP_HASH_THRESHOLD) return { receipt: best, reason: "foto" };
+  }
+
+  return null;
 }
 
 function ocrStatusLabel(status) {
@@ -163,7 +218,7 @@ function wireReview() {
   });
 }
 
-function openReview(fields) {
+function openReview(fields, dupInfo) {
   $("#review-photo").src = capturedObjectUrl;
   $("#f-data").value = fields.data || "";
   $("#f-numero").value = fields.numero || "";
@@ -183,6 +238,7 @@ function openReview(fields) {
   });
 
   markUncertainFields(fields);
+  renderDupBanner(dupInfo);
   showView("#view-review");
 }
 
@@ -191,6 +247,26 @@ function markUncertainFields(fields) {
   Object.entries(map).forEach(([key, elId]) => {
     $("#" + elId).classList.toggle("warn", !fields[key]);
   });
+}
+
+function renderDupBanner(dupInfo) {
+  const banner = $("#dup-banner");
+  if (!dupInfo) {
+    banner.classList.add("hidden");
+    return;
+  }
+  const r = dupInfo.receipt;
+  const quando = r.createdAt
+    ? new Date(r.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "antes";
+  const estab = (r.fields && r.fields.razao) || "sem nome identificado";
+  const motivo =
+    dupInfo.reason === "foto"
+      ? "a foto é muito parecida com a de uma nota já registrada"
+      : "o número da nota e o CNPJ já foram registrados antes";
+  $("#dup-banner-text").textContent =
+    `Encontrei uma nota parecida — ${estab}, ${quando} — ${motivo}. Confira antes de confirmar; se for outra nota mesmo, pode continuar normalmente.`;
+  banner.classList.remove("hidden");
 }
 
 function gatherFieldsFromForm() {
@@ -212,9 +288,20 @@ async function confirmAndSave() {
   const fields = gatherFieldsFromForm();
   const thumbnail = await makeThumbnail(capturedBlob).catch(() => null);
 
+  // Guardamos a foto como ArrayBuffer (+ o tipo MIME), não como Blob/File
+  // direto. O IndexedDB do Safari/iOS tem um bug conhecido em que um Blob
+  // gravado volta com 0 bytes ao ser lido de volta (mais comum em PWA
+  // instalado na tela de início) — sem erro nenhum, o app "conclui" o
+  // envio normalmente e nenhum arquivo chega no OneDrive. ArrayBuffer não
+  // sofre desse problema.
+  const photoBuffer = await capturedBlob.arrayBuffer();
+  const photoType = capturedBlob.type || "image/jpeg";
+
   const receipt = await Storage.addReceipt({
     fields,
-    photoBlob: capturedBlob,
+    photoBuffer,
+    photoType,
+    imageHash: capturedImageHash,
     thumbnail,
     status: "pending",
     photoUploaded: false,
@@ -296,13 +383,18 @@ async function trySyncOne(id, onProgress) {
 
   // 1) Foto no OneDrive (pula se uma tentativa anterior já enviou).
   if (!photoOk) {
-    if (!receipt.photoBlob) {
-      errors.push("Foto não encontrada localmente para reenviar.");
+    // photoBuffer é o formato atual (ArrayBuffer); photoBlob é mantido só
+    // para notas antigas que já estavam salvas antes dessa mudança.
+    const photoBlob = receipt.photoBuffer
+      ? new Blob([receipt.photoBuffer], { type: receipt.photoType || "image/jpeg" })
+      : receipt.photoBlob || null;
+    if (!photoBlob || !photoBlob.size) {
+      errors.push("Foto não encontrada localmente para reenviar. Tire a foto novamente.");
     } else {
       try {
         if (onProgress) onProgress(10, "Enviando a foto para o OneDrive…");
         const filename = receipt.photoFilename || Graph.suggestFileName(receipt.fields);
-        await Graph.uploadPhoto(settings, receipt.photoBlob, filename, token, (pct) => {
+        await Graph.uploadPhoto(settings, photoBlob, filename, token, (pct) => {
           if (onProgress) onProgress(10 + Math.round(pct * 0.5), "Enviando a foto para o OneDrive…");
         });
         photoOk = true;
@@ -330,7 +422,7 @@ async function trySyncOne(id, onProgress) {
 
   if (photoOk && rowOk) {
     if (onProgress) onProgress(100, "Concluído.");
-    await Storage.updateReceipt(id, { status: "synced", errorMessage: null, photoBlob: null });
+    await Storage.updateReceipt(id, { status: "synced", errorMessage: null, photoBlob: null, photoBuffer: null });
     return { ok: true };
   }
 

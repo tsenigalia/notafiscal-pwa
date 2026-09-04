@@ -8,7 +8,7 @@
 // em storage.js, não pelo service worker).
 // ============================================================
 
-const CACHE_NAME = "notasfiscais-shell-v2";
+const CACHE_NAME = "notasfiscais-shell-v4";
 const CORE_ASSETS = [
   "./",
   "./index.html",

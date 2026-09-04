@@ -101,19 +101,50 @@ const Ocr = (() => {
   }
 
   function parseDate(text) {
-    // Procura preferencialmente uma data perto da palavra "emiss".
+    // Procura preferencialmente uma data perto de uma palavra que indique
+    // emissão. Cobre variações que o OCR costuma produzir ("emissao",
+    // "emitida em", "dt emissao", etc.) e evita confundir com datas de
+    // validade/vencimento/entrada que aparecem em outra linha do cupom.
     const lines = text.split(/\n/);
     const dateRe = /(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/;
+    const emissKeywordRe = /(emiss|emitid|dt\.?\s*emiss)/;
+    const avoidKeywordRe = /(valid|vencim|entrada|previs)/;
 
-    for (const line of lines) {
-      const norm = stripAccents(line).toLowerCase();
-      if (norm.includes("emiss")) {
-        const m = line.match(dateRe);
-        if (m) return toIsoDate(m);
+    for (let i = 0; i < lines.length; i++) {
+      const norm = stripAccents(lines[i]).toLowerCase();
+      if (!emissKeywordRe.test(norm) || avoidKeywordRe.test(norm)) continue;
+
+      const m = lines[i].match(dateRe);
+      if (m) {
+        const iso = toIsoDate(m);
+        if (iso) return iso;
+      }
+      // Em cupons estreitos o rótulo e o valor às vezes saem em linhas
+      // separadas pelo OCR — tenta a linha seguinte antes de desistir.
+      if (lines[i + 1]) {
+        const m2 = lines[i + 1].match(dateRe);
+        if (m2) {
+          const iso2 = toIsoDate(m2);
+          if (iso2) return iso2;
+        }
       }
     }
-    const m = text.match(dateRe);
-    return m ? toIsoDate(m) : "";
+
+    // Sem palavra-chave localizável: olha todas as datas válidas do texto
+    // e prefere uma que não esteja numa linha de validade/vencimento —
+    // melhor do que simplesmente pegar a primeira data que aparece.
+    const candidates = [];
+    for (const line of lines) {
+      const norm = stripAccents(line).toLowerCase();
+      const m = line.match(dateRe);
+      if (m) {
+        const iso = toIsoDate(m);
+        if (iso) candidates.push({ iso, avoid: avoidKeywordRe.test(norm) });
+      }
+    }
+    const preferred = candidates.find((c) => !c.avoid);
+    if (preferred) return preferred.iso;
+    return candidates.length ? candidates[0].iso : "";
   }
 
   function toIsoDate(m) {
@@ -181,13 +212,40 @@ const Ocr = (() => {
     return best !== null ? best.toFixed(2).replace(".", ",") : "";
   }
 
+  function cleanRazaoLine(line) {
+    return line.replace(/\s{2,}/g, " ").trim();
+  }
+
+  // Linhas de cabeçalho que aparecem em quase todo cupom/nota, mas nunca
+  // são o nome do estabelecimento — sem filtrar isso, a heurística abaixo
+  // (primeira linha "parecida com nome") frequentemente pegava uma dessas
+  // em vez do nome real, principalmente quando o nome vem em logo/fonte
+  // estilizada que o OCR lê mal e a frase de cabeçalho — impressa em fonte
+  // normal — sai mais limpa.
+  const razaoBoilerplateRe =
+    /(cupom fiscal|nota fiscal|documento auxiliar|via do (cliente|estabelecimento|consumidor)|extrato n[ãa]o fiscal|sat[- ]?cf-?e|nfc-?e|consumidor|cnpj|^ie[:.]|endere[çc]o|telefone|^tel[:.]|^cep[:.]|www\.|https?:)/i;
+
   function parseRazaoSocial(text) {
     const lines = text.split(/\n/).map((l) => l.trim()).filter(Boolean);
-    for (const line of lines.slice(0, 6)) {
+
+    // 1) Rótulo explícito ("Razão Social:", "Nome Fantasia:", etc.) — mais
+    // confiável quando presente, comum em DANFE/NFC-e.
+    const labelRe = /(raz[aã]o\s*social|nome\s*fantasia|estabelecimento)\s*[:\-]\s*(.+)/i;
+    for (const line of lines.slice(0, 12)) {
+      const m = line.match(labelRe);
+      if (m && m[2] && m[2].trim().length >= 4) {
+        return cleanRazaoLine(m[2]);
+      }
+    }
+
+    // 2) Sem rótulo: primeira linha que parece nome de empresa entre as
+    // primeiras do cupom, ignorando as frases de cabeçalho padrão.
+    for (const line of lines.slice(0, 8)) {
+      if (razaoBoilerplateRe.test(line)) continue;
       const digitsOnly = line.replace(/\D/g, "");
       const letters = line.replace(/[^a-zA-ZÀ-ÿ]/g, "");
       if (letters.length >= 4 && digitsOnly.length < letters.length) {
-        return line.replace(/\s{2,}/g, " ").trim();
+        return cleanRazaoLine(line);
       }
     }
     return "";
@@ -214,5 +272,55 @@ const Ocr = (() => {
     };
   }
 
-  return { recognize, parseFields };
+  // ---------- Hash perceptual da foto (para avisar sobre duplicata) ----------
+  // dHash simples: reduz a foto a uma grade pequena em tons de cinza e
+  // registra, pixel a pixel, se ele é mais claro ou mais escuro que o
+  // vizinho da direita. O resultado (64 bits, guardado como hex) muda
+  // pouco entre duas fotos praticamente iguais da mesma nota, mesmo com
+  // diferença de enquadramento/luz — não precisa ser perfeito, só bom o
+  // suficiente para pegar "fotografei a mesma nota de novo por engano".
+  async function computeImageHash(file) {
+    const bitmap = await createImageBitmap(file);
+    const w = 9,
+      h = 8;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const { data } = ctx.getImageData(0, 0, w, h);
+
+    const gray = [];
+    for (let i = 0; i < data.length; i += 4) {
+      gray.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    }
+
+    let bits = "";
+    for (let row = 0; row < h; row++) {
+      for (let col = 0; col < w - 1; col++) {
+        bits += gray[row * w + col] > gray[row * w + col + 1] ? "1" : "0";
+      }
+    }
+    let hex = "";
+    for (let i = 0; i < bits.length; i += 4) {
+      hex += parseInt(bits.slice(i, i + 4).padEnd(4, "0"), 2).toString(16);
+    }
+    return hex;
+  }
+
+  // Quantos bits diferem entre dois hashes (0 = idênticos, 64 = opostos).
+  function hammingDistanceHex(hexA, hexB) {
+    if (!hexA || !hexB || hexA.length !== hexB.length) return Infinity;
+    let dist = 0;
+    for (let i = 0; i < hexA.length; i++) {
+      let x = parseInt(hexA[i], 16) ^ parseInt(hexB[i], 16);
+      while (x) {
+        dist += x & 1;
+        x >>= 1;
+      }
+    }
+    return dist;
+  }
+
+  return { recognize, parseFields, computeImageHash, hammingDistanceHex };
 })();
