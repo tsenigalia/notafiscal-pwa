@@ -7,15 +7,10 @@
 // aparece no app.
 // ============================================================
 const CATEGORIAS_PADRAO = [
-  "Reforma",
-  "Mercado",
-  "Casa",
-  "Viagem",
   "Alimentação",
   "Transporte",
+  "Hospedagem",
   "Saúde",
-  "Lazer",
-  "Presente",
-  "Escritório",
+  "Impostos",
   "Outros",
 ];
