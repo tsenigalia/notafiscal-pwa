@@ -266,30 +266,21 @@ function openReview(fields, dupInfo) {
 }
 
 // ---------------------------------------------------------------
-// Categoria (lista fixa vinda de js/categorias.js, com opção "Outra")
+// Categoria (lista fixa vinda de js/categorias.js — mesmo padrão do
+// campo "Forma de pagamento": um <select> simples, sem digitação livre)
 // ---------------------------------------------------------------
-const CATEGORIA_OUTRA_VALUE = "__outra__";
-
 function wireCategoria() {
   const select = $("#f-categoria");
   select.innerHTML = "";
-  select.appendChild(new Option("Selecione…", ""));
+  select.appendChild(new Option("Não identificado", ""));
   (typeof CATEGORIAS_PADRAO !== "undefined" ? CATEGORIAS_PADRAO : []).forEach((c) => {
     select.appendChild(new Option(c, c));
   });
-  select.appendChild(new Option("Outra (digitar)…", CATEGORIA_OUTRA_VALUE));
-
-  select.addEventListener("change", () => {
-    const isOutra = select.value === CATEGORIA_OUTRA_VALUE;
-    $("#f-categoria-outra").classList.toggle("hidden", !isOutra);
-    if (isOutra) $("#f-categoria-outra").focus();
-  });
+  select.appendChild(new Option("Outra", "Outra"));
 }
 
 function resetCategoriaField() {
   $("#f-categoria").value = "";
-  $("#f-categoria-outra").value = "";
-  $("#f-categoria-outra").classList.add("hidden");
 }
 
 function markUncertainFields(fields) {
@@ -325,9 +316,6 @@ function renderDupBanner(dupInfo) {
 }
 
 function gatherFieldsFromForm() {
-  const categoriaSelect = $("#f-categoria").value;
-  const categoria =
-    categoriaSelect === CATEGORIA_OUTRA_VALUE ? $("#f-categoria-outra").value.trim() : categoriaSelect;
   return {
     data: $("#f-data").value,
     numero: $("#f-numero").value.trim(),
@@ -335,7 +323,7 @@ function gatherFieldsFromForm() {
     razao: $("#f-razao").value.trim(),
     valor: $("#f-valor").value.trim(),
     pagamento: $("#f-pagamento").value,
-    categoria,
+    categoria: $("#f-categoria").value,
   };
 }
 
